@@ -1,0 +1,354 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load neccessary dependencies
+
+library(tidyverse)
+library(ggplot2)
+library(fs)
+library(stringr)
+library(gt)
+library(lubridate)
+library(forcats)
+
+```
+
+
+```{r candidate_data, echo=FALSE, cache=TRUE}
+
+# Download candidate master data from appropriate year from the FEC website
+
+download.file(url = "https://www.fec.gov/files/bulk-downloads/2006/weball06.zip", destfile = "candidates.zip", mode="wb")
+
+# Read data into R structure, and limit it to relevant columns, with data type being inferred
+
+candidates <- read_delim("candidates.zip", 
+                         "|", 
+                         col_names = FALSE, 
+                         col_types =  cols_only(
+                           X1 = "?", 
+                           X2 = "?", 
+                           X5 = "?", 
+                           X11 = "?", 
+                           X19 = "?")) %>% 
+  
+  # Provide meaningful variable names 
+  transmute(cand_id = X1, 
+            cand_name = X2, 
+            party = X5, 
+            cash = X11, 
+            cand_state = X19)
+
+# Delete data file now that it has been read into an R structure
+
+fs::file_delete("candidates.zip")
+
+```
+
+# 
+
+```{r candidate_info, echo=FALSE}
+
+# Make all party designations capitalized to conform to FEC norms -- has the benefit of converting 'Rep' and 'Dem' discreppancies of case to correct versions
+
+candidates$party <- str_to_upper(candidates$party)
+
+# Convert names to title case rather than all caps
+
+candidates$cand_name <- str_to_title(candidates$cand_name)
+
+```
+
+# 
+
+```{r cash_table, echo=FALSE, warning=FALSE, results="asis"}
+
+candidates %>% 
+  
+  # Provide more meaningful factor labels than the current abbreviations using fct_collapse, which also allows us to combine DEM and DFL as both Democrat
+  
+  mutate(party = 
+           fct_collapse(party, 
+                        "Democrat" = c("DEM", "DFL"), 
+                        "Republican" = "REP", 
+                        "Independent" = "IND", 
+                        "Libertarian" = "LIB", 
+                        "Other" = "OTH")) %>% 
+  
+  # Group by party as we care about the cash per party
+  group_by(party) %>% 
+  
+  # Calculate the total cash per party by summing across the values within each party
+  summarise(total_cash = sum(cash)) %>% 
+  
+  arrange(desc(total_cash)) %>% 
+  
+  # Select only the top 5 parties and their aggregate cash
+  head(5) %>% 
+  
+  # Create gt table for improved aesthetics
+  gt() %>% 
+  
+    tab_header(
+      title = "2005-2006 Top 5 Party Cash Holdings") %>% 
+  # Set order of columns and their corresponding labels
+    cols_label(
+      party = "Party",
+      total_cash = "Aggregate Cash") %>%
+  
+  # Format money with dollar sign and comma
+  fmt_currency(columns = vars(total_cash)) %>%
+
+  tab_source_note(
+    source_note = "Source: Federal Election Commision") %>% 
+  
+  # Turn table into html and add it to the markdown file
+  as_raw_html() %>% as.character() %>% cat()
+
+```
+
+#  
+
+```{r committee_data, echo=FALSE, cache=TRUE, results="asis"}
+
+# Download committee data from the FEC website
+
+download.file(url = "https://www.fec.gov/files/bulk-downloads/2006/cm06.zip", destfile = "committee.zip", mode="wb")
+
+# Read data into R structure, and limit it to relevant columns, with data type being inferred
+
+committee <- read_delim("committee.zip", 
+                        "|", 
+                        col_names = FALSE, 
+                        col_types =  cols_only(
+                          X15 = "?", 
+                          X1 = "?", 
+                          X11 = "?")) %>% 
+  transmute(
+    cand_id = X15, 
+    cmte_id = X1, 
+    cmte_party = X11)
+
+# Delete original data file now that it has been read into an R structure
+
+fs::file_delete("committee.zip")
+
+# Make all party designations capitalized to conform to FEC norms -- has the benefit of converting 'Rep' and 'Dem' discreppancies of case to correct versions
+
+committee$cmte_party <- str_to_upper(committee$cmte_party)
+
+committee_na <- committee %>%
+  
+  # Remove rows with an NA value of cmte_party to ignore them
+  filter(!is.na(cmte_party)) %>%
+  
+  # Relevel cmte_party to just three levels, with different designations for Democrat lumped together, different designations for Republican lumped together, and everything else considered part of the third, "Other", factor level
+  
+  mutate(cmte_party = fct_collapse(
+    cmte_party, 
+    "Democrat" = c("DEM", "D"), 
+    "Republican" = c("REP", "R")), 
+    cmte_party = fct_lump(
+      cmte_party,
+      other_level = "Other")) 
+
+committee_na %>% 
+  
+  # Table meant to show data by party, so group by party
+  
+  group_by(cmte_party) %>% 
+  
+  # Calculate the unique cand_ids and cmte_ids within each party
+  
+  summarise(
+    unique_cand_id = n_distinct(cand_id), 
+    unique_cmte_id = n_distinct(cmte_id)) %>% 
+  
+  # Create gt table for improved aesthetics
+  
+  gt() %>% 
+  
+    tab_header(
+      title = "Unique Candidates and Committees") %>%
+  
+  # Set order of columns and their corresponding labels
+    cols_label(
+      cmte_party = "Party",
+      unique_cand_id = "Unique Candidates",
+      unique_cmte_id = "Unique Committees") %>%
+
+  tab_source_note(
+    source_note = 
+      "Source: Federal Election Commision, 2005-2006") %>% 
+  
+  # Turn table into html and add it to the markdown file
+  as_raw_html() %>% as.character() %>% cat()
+
+```
+
+# 
+
+```{r contribution_data, echo=FALSE, cache=TRUE}
+
+# Download individual contribution data from the FEC website
+
+download.file(url = "https://www.fec.gov/files/bulk-downloads/2006/indiv06.zip", destfile = "contributions.zip", mode="wb")
+
+# Read data into R structure, and limit it to relevant columns, with data type being inferred
+
+contributions <- read_delim("contributions.zip", "|",
+                            escape_double = FALSE, 
+                            col_names = FALSE, 
+                            col_types =  cols_only(
+                              X14 = "?", 
+                              X15 = "?", 
+                              X12 = "?", 
+                              X13 = "?", 
+                              X1 = "?"), 
+                            guess_max = 1000) %>% 
+  transmute(date = mdy(X14), 
+            amount = X15, 
+            employer = X12, 
+            occupation = X13, 
+            cmte_id = X1)
+
+# Delete original data file now that it has been read into an R structure
+
+fs::file_delete("contributions.zip")
+
+```
+
+# 
+
+```{r contributions, echo=FALSE, results="asis"}
+
+# Filter contributions data for just those where the donor's employer was exactly HARVARD UNIVERSITY, and where their occupation includes PROFESSOR
+
+individuals <- contributions %>%
+  filter(employer == "HARVARD UNIVERSITY", 
+         str_detect(occupation, pattern = "PROFESSOR"))
+
+# Combine individual data with committee data using the cmte_id field that the two have in common. Then, using the cand_id field brought over from the committee data, merge with the candidate data, which contains the relevant party column
+
+donations <- 
+  left_join(individuals, committee, by = "cmte_id") %>% 
+  left_join(candidates, by = "cand_id") %>% 
+  
+  # Remove rows with NA for the party
+  filter(!is.na(party)) 
+
+# Convert dates to a factor and collapse into intervals corresponding to the quarters of a year
+
+donations$date <- donations$date %>% cut(breaks = "quarter")
+
+donations %>%
+  
+  # Select just relevant data for easier manipulation
+  select(date, party) %>% 
+  
+  # Group by date and party to count party donations within each date interval
+  
+  group_by(date, party) %>% 
+  count(party) %>% 
+  
+  # Convert to proper shaped table by spreading across by party so that they are separated out
+  spread(key=party, value=n, fill = 0) %>% 
+  
+  # Ungroup to remove grouping rules so that gt table can be formatted properly
+  
+  ungroup() %>% 
+  
+  # Create gt table for better aesthetics
+  
+  gt() %>% 
+  
+    tab_header(
+      title = "Party Donations per Quarter") %>% 
+  
+  #Set order of columns and their corresponding labels
+    cols_label(
+      date = "Quarter",
+      DEM = "Democrat",
+      REP = "Republican") %>%
+
+  tab_source_note(
+    source_note = "Source: Federal Election Commision, 2005-2006") %>% 
+  
+  # Turn table into html and add it to the markdown file
+  as_raw_html() %>% as.character() %>% cat()
+
+# Create subselected dataset from contributions relevant for the graphic to be made in Q5 -- merge with committee and candidates to get the corresponding party variable, and then filter for just HARVARD UNIVERSITY as the employer. 
+
+for_graphic <- 
+  
+  left_join(contributions, committee, by = "cmte_id") %>% 
+  left_join(candidates, by = "cand_id") %>% 
+  filter(employer == "HARVARD UNIVERSITY") %>% 
+  
+  # Select just the relevant variables for tidiness
+  select(amount, date, party)
+
+# Create temp file to write the R data structure to
+
+graphic_file <- tempfile()
+
+# Write the R data structure to the temporary file
+
+write_rds(for_graphic, "graphic_file.rds")
+
+```
+
+# 
+
+```{r pressure, echo=FALSE, warning=FALSE}
+
+# Read in data on Harvard University employees from rds file
+
+contributions_data <- read_rds("graphic_file.rds")
+
+# Convert dates to a factor and to quarter intervals
+
+contributions_data$date <- contributions_data$date %>% cut(breaks = "quarter")
+
+contributions_data %>% 
+  
+  # Remove rows with NA for the party - not useful information
+  
+  filter(!is.na(party)) %>% 
+  
+  # Plot date on the x-axis and amount on the y-axis, coloring by party
+  
+  ggplot(aes(x = date, y = amount, fill = party)) +
+  
+  # Hide the legend - use plot annotations instead
+  geom_col(show.legend = FALSE) +
+  
+  # Change coloring so that Democrat is blue, Independent is Green, and Republican is red
+  
+  scale_fill_manual(values=c("deepskyblue3", "green", "red")) +
+  
+  labs(
+    title = "Political Donations by Harvard University Employees", subtitle = "Donations were mostly to the Democrats, and peaked just before the election", caption = "Source: Federal Election Commission, 2005-2006") + 
+  
+  # Add dollar signs to the y-axis labels
+  scale_y_continuous(labels = scales::dollar) +
+  
+  # Convert date labels for the x-axis into something more meaningful
+  scale_x_discrete(labels = c("Jan '05", "April", "July", "October", "Jan '06", "April", "July", "October")) +
+  
+  # Provide an x-axis title to clarify that this is done by quarter, but no yaxis title is needed
+  
+  xlab("Quarter") + ylab(NULL) +
+  
+  # add Democrat, Independent, and Republican plot labels
+  annotate("text",
+    x = c(1.5, 1.5, 1.5),
+    y = c(45000, 40000, 35000),
+    label = c("Democrat", "Indepdent", "Republican"),
+    color = c("deepskyblue3", "darkgreen", "red"))
+
+```
